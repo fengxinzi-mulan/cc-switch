@@ -327,6 +327,19 @@ impl ProxyServer {
             .route("/v1/responses", post(handlers::handle_responses))
             .route("/v1/v1/responses", post(handlers::handle_responses))
             .route("/codex/v1/responses", post(handlers::handle_responses))
+            // Codex built-in web search. Codex appends `alpha/search` directly
+            // to its configured base_url, so accept the same compatibility
+            // prefixes as the Responses endpoint.
+            .route("/alpha/search", post(handlers::handle_codex_search))
+            .route("/v1/alpha/search", post(handlers::handle_codex_search))
+            .route(
+                "/v1/v1/alpha/search",
+                post(handlers::handle_codex_search),
+            )
+            .route(
+                "/codex/v1/alpha/search",
+                post(handlers::handle_codex_search),
+            )
             // Grok Build uses the Responses protocol but has an independent
             // provider namespace and failover queue.
             .route(
