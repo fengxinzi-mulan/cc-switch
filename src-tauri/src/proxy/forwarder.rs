@@ -1149,6 +1149,12 @@ impl RequestForwarder {
             && super::providers::should_convert_codex_responses_to_chat(provider, endpoint);
         let codex_responses_to_anthropic = matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && super::providers::should_convert_codex_responses_to_anthropic(provider, endpoint);
+        // Codex invokes built-in tools through auxiliary endpoints such as
+        // `/alpha/search`. They are JSON passthrough requests, not Responses
+        // requests, so they must not receive model/protocol transformations or
+        // the Responses adapter's implicit `/v1` URL rewrite.
+        let codex_auxiliary_endpoint = matches!(app_type, AppType::Codex)
+            && is_codex_auxiliary_endpoint(endpoint);
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
 
@@ -1159,7 +1165,9 @@ impl RequestForwarder {
         // 应用模型映射（独立于格式转换）
         // Claude Desktop proxy 模式必须先把 Desktop 可见的 claude-* route
         // 映射成真实上游模型名，并且未知 route 要直接报错，不能使用默认模型兜底。
-        let mapped_body = if matches!(app_type, AppType::ClaudeDesktop) {
+        let mapped_body = if codex_auxiliary_endpoint {
+            body.clone()
+        } else if matches!(app_type, AppType::ClaudeDesktop) {
             crate::claude_desktop_config::map_proxy_request_model(body.clone(), provider)
                 .map_err(|e| ProxyError::InvalidRequest(e.to_string()))?
         } else {
@@ -1169,7 +1177,11 @@ impl RequestForwarder {
         };
 
         // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）
-        let mut mapped_body = normalize_thinking_type(mapped_body);
+        let mut mapped_body = if codex_auxiliary_endpoint {
+            mapped_body
+        } else {
+            normalize_thinking_type(mapped_body)
+        };
 
         // Grok Build exposes a stable client-side model profile in config.toml.
         // Route requests to the provider's real upstream model before applying
@@ -1183,7 +1195,7 @@ impl RequestForwarder {
                 super::providers::copilot_model_map::apply_copilot_model_normalization(mapped_body);
             self.apply_copilot_live_model_resolution(provider, &mut mapped_body)
                 .await;
-        } else if !codex_responses_to_anthropic {
+        } else if !codex_responses_to_anthropic && !codex_auxiliary_endpoint {
             // Skip on the Codex→Anthropic path: stripping [1m] here would break both the
             // model-catalog match (apply_codex_upstream_model) and the transform's own
             // strip+`context-1m` beta detection. The marker is stripped later, on the
@@ -1386,7 +1398,9 @@ impl RequestForwarder {
         let codex_anthropic_base_is_full_endpoint =
             codex_responses_to_anthropic && base_url_is_full_endpoint(&base_url, "/v1/messages");
 
-        let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
+        let url = if codex_auxiliary_endpoint {
+            super::providers::build_codex_auxiliary_url(&base_url, &effective_endpoint)
+        } else if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
             super::gemini_url::resolve_gemini_native_url(
                 &base_url,
                 &effective_endpoint,
@@ -1529,6 +1543,7 @@ impl RequestForwarder {
         // passthrough. The response handler restores the flat names using a map
         // re-derived from the same request tools.
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_auxiliary_endpoint
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
             && super::providers::provider_needs_responses_namespace_flatten(provider)
@@ -1550,6 +1565,7 @@ impl RequestForwarder {
         // provider is affected. Runs after the flatten above so lifted
         // `namespace` tools survive the tool-type whitelist.
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_auxiliary_endpoint
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
             && super::providers::provider_needs_responses_namespace_flatten(provider)
@@ -1563,14 +1579,18 @@ impl RequestForwarder {
             );
         }
 
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
+        if matches!(app_type, AppType::Codex | AppType::GrokBuild) && !codex_auxiliary_endpoint {
             self.apply_media_prevention(&mut request_body, provider);
         }
 
         // 过滤私有参数（以 `_` 开头的字段），防止内部信息泄露到上游
         // 默认使用空白名单，过滤所有 _ 前缀字段
-        let mut filtered_body = prepare_upstream_request_body(request_body);
-        if !is_copilot {
+        let mut filtered_body = if codex_auxiliary_endpoint {
+            request_body
+        } else {
+            prepare_upstream_request_body(request_body)
+        };
+        if !is_copilot && !codex_auxiliary_endpoint {
             if let Some(overrides) = provider
                 .meta
                 .as_ref()
@@ -1589,14 +1609,16 @@ impl RequestForwarder {
         {
             outbound_model = Some(m.to_string());
         }
-        log_prompt_cache_trace(
-            app_type,
-            provider,
-            &effective_endpoint,
-            resolved_claude_api_format.as_deref(),
-            &filtered_body,
-            self.session_client_provided,
-        );
+        if !codex_auxiliary_endpoint {
+            log_prompt_cache_trace(
+                app_type,
+                provider,
+                &effective_endpoint,
+                resolved_claude_api_format.as_deref(),
+                &filtered_body,
+                self.session_client_provided,
+            );
+        }
         let request_is_streaming =
             is_streaming_request(&effective_endpoint, &filtered_body, headers);
         let force_identity_encoding = needs_transform
@@ -2154,14 +2176,16 @@ impl RequestForwarder {
             );
         }
 
-        apply_local_proxy_header_overrides(
-            &mut ordered_headers,
-            provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.local_proxy_request_overrides.as_ref()),
-            is_copilot,
-        );
+        if !codex_auxiliary_endpoint {
+            apply_local_proxy_header_overrides(
+                &mut ordered_headers,
+                provider
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.local_proxy_request_overrides.as_ref()),
+                is_copilot,
+            );
+        }
 
         reject_proxy_placeholder_for_managed_account_upstream(&url, &ordered_headers)?;
 
@@ -3467,6 +3491,13 @@ fn prepare_upstream_request_body(request_body: Value) -> Value {
     canonicalize_value(filter_private_params_with_whitelist(request_body, &[]))
 }
 
+fn is_codex_auxiliary_endpoint(endpoint: &str) -> bool {
+    endpoint
+        .split_once('?')
+        .map_or(endpoint, |(path, _)| path)
+        == "/alpha/search"
+}
+
 fn log_prompt_cache_trace(
     app_type: &AppType,
     provider: &Provider,
@@ -3754,6 +3785,13 @@ mod tests {
             serde_json::to_string(&prepared).unwrap(),
             r#"{"a":2,"tools":[{"name":"lookup","parameters":{"properties":{"_id":{"type":"string"},"a":{"type":"string"},"b":{"type":"number"}},"type":"object"}}],"z":1}"#
         );
+    }
+
+    #[test]
+    fn codex_auxiliary_endpoint_matches_search_with_or_without_query() {
+        assert!(is_codex_auxiliary_endpoint("/alpha/search"));
+        assert!(is_codex_auxiliary_endpoint("/alpha/search?limit=5"));
+        assert!(!is_codex_auxiliary_endpoint("/responses"));
     }
 
     #[test]

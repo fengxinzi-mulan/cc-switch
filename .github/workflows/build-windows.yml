@@ -1,0 +1,109 @@
+name: Build Windows x64
+
+on:
+  push:
+    branches:
+      - sys-dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        shell: pwsh
+        run: |
+          $storePath = pnpm store path --silent
+          "path=$storePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Restore pnpm store
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: windows-x64-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: windows-x64-pnpm-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test Codex proxy routing
+        run: cargo test --manifest-path src-tauri/Cargo.toml codex --lib
+
+      - name: Build unsigned Windows MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $configPath = Join-Path $env:RUNNER_TEMP 'tauri-build-override.json'
+          @'
+          {
+            "bundle": {
+              "createUpdaterArtifacts": false
+            }
+          }
+          '@ | Set-Content -Path $configPath -Encoding utf8
+          pnpm tauri build --bundles msi --config $configPath
+
+      - name: Package Windows artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          $assetPrefix = "CC-Switch-$version-Windows-x64-$($env:GITHUB_RUN_NUMBER)-$shortSha"
+          $artifactDir = 'artifacts/windows-x64'
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          $msi = Get-ChildItem -Path 'src-tauri/target/release/bundle/msi' -Recurse -Filter '*.msi' |
+            Select-Object -First 1
+          if ($null -eq $msi) {
+            throw 'Windows MSI installer was not produced'
+          }
+          Copy-Item $msi.FullName (Join-Path $artifactDir "$assetPrefix.msi")
+
+          $exePath = 'src-tauri/target/release/cc-switch.exe'
+          if (-not (Test-Path $exePath)) {
+            throw 'Windows executable was not produced'
+          }
+          $portableDir = Join-Path $artifactDir 'portable'
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+          Copy-Item $exePath $portableDir
+          @(
+            '# CC Switch portable build marker',
+            'portable=true'
+          ) | Set-Content -Path (Join-Path $portableDir 'portable.ini') -Encoding utf8
+          Compress-Archive -Path "$portableDir/*" -DestinationPath (Join-Path $artifactDir "$assetPrefix-Portable.zip") -Force
+          Remove-Item -Recurse -Force $portableDir
+
+      - name: Upload Windows x64 artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: cc-switch-windows-x64-${{ github.run_number }}-${{ github.sha }}
+          path: artifacts/windows-x64
+          if-no-files-found: error
+          retention-days: 30

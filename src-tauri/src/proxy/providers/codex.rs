@@ -549,6 +549,19 @@ pub fn is_origin_only_url(value: &str) -> bool {
     }
 }
 
+/// Build the URL for a Codex auxiliary endpoint such as `alpha/search`.
+///
+/// Codex itself appends these endpoints directly to the configured provider
+/// base URL. This intentionally differs from [`ProviderAdapter::build_url`],
+/// which adds `/v1` for an origin-only Responses base URL.
+pub fn build_codex_auxiliary_url(base_url: &str, endpoint: &str) -> String {
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        endpoint.trim_start_matches('/')
+    )
+}
+
 fn extract_codex_wire_api_from_toml(config_text: &str) -> Option<String> {
     let doc = config_text.parse::<TomlValue>().ok()?;
 
@@ -1248,6 +1261,18 @@ wire_api = "anthropic"
         let adapter = CodexAdapter::new();
         let url = adapter.build_url("https://api.openai.com", "/responses");
         assert_eq!(url, "https://api.openai.com/v1/responses");
+    }
+
+    #[test]
+    fn test_build_auxiliary_url_preserves_configured_base_path() {
+        assert_eq!(
+            build_codex_auxiliary_url("https://api.openai.com", "/alpha/search"),
+            "https://api.openai.com/alpha/search"
+        );
+        assert_eq!(
+            build_codex_auxiliary_url("https://gateway.example/v1/", "/alpha/search?limit=5"),
+            "https://gateway.example/v1/alpha/search?limit=5"
+        );
     }
 
     #[test]
