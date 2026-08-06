@@ -2714,7 +2714,7 @@
       "validationFailed": "The following fields are out of valid range: {{fields}}",
       "retrySettings": "Retry & Timeout Settings",
       "failureThreshold": "Failure Threshold",
-      "failureThresholdHint": "Open circuit breaker after this many consecutive failures (recommended: 3-10)",
+      "failureThresholdHint": "Open the circuit breaker after this many consecutive failures (minimum 1, customizable)",
       "timeout": "Recovery Wait Time (seconds)",
       "timeoutHint": "Wait this long before trying to recover after circuit opens (recommended: 30-120)",
       "circuitBreakerSettings": "Circuit Breaker Settings",
@@ -2738,10 +2738,10 @@
       "streamingFirstByte": "Streaming First Byte Timeout",
       "streamingIdle": "Streaming Idle Timeout",
       "nonStreaming": "Non-Streaming Timeout",
-      "maxRetriesHint": "Number of retries on request failure (0-10)",
-      "streamingFirstByteHint": "Max time to wait for first data chunk, range 1-120s, default 60s",
-      "streamingIdleHint": "Max interval between data chunks, range 60-600s, 0 to disable (prevents mid-stream stalls)",
-      "nonStreamingHint": "Total timeout for non-streaming requests, range 60-1200s, default 600s (10 min)"
+      "maxRetriesHint": "Number of retries on request failure (minimum 0, customizable)",
+      "streamingFirstByteHint": "Max time to wait for the first data chunk, minimum 1s, default 60s",
+      "streamingIdleHint": "Max interval between data chunks, 0 to disable (prevents mid-stream stalls)",
+      "nonStreamingHint": "Total timeout for non-streaming requests, minimum 60s, default 600s (10 min)"
     },
     "logging": {
       "enabled": "Logging enabled",

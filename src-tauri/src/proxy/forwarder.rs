@@ -1153,8 +1153,8 @@ impl RequestForwarder {
         // `/alpha/search`. They are JSON passthrough requests, not Responses
         // requests, so they must not receive model/protocol transformations or
         // the Responses adapter's implicit `/v1` URL rewrite.
-        let codex_auxiliary_endpoint = matches!(app_type, AppType::Codex)
-            && is_codex_auxiliary_endpoint(endpoint);
+        let codex_auxiliary_endpoint =
+            matches!(app_type, AppType::Codex) && is_codex_auxiliary_endpoint(endpoint);
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
 
@@ -3511,10 +3511,7 @@ fn prepare_upstream_request_body(request_body: Value) -> Value {
 }
 
 fn is_codex_auxiliary_endpoint(endpoint: &str) -> bool {
-    endpoint
-        .split_once('?')
-        .map_or(endpoint, |(path, _)| path)
-        == "/alpha/search"
+    endpoint.split_once('?').map_or(endpoint, |(path, _)| path) == "/alpha/search"
 }
 
 fn log_prompt_cache_trace(

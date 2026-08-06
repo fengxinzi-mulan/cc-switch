@@ -796,9 +796,15 @@ pub async fn handle_codex_search(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex Search", "codex")
-            .await?;
+    let mut ctx = RequestContext::new(
+        &state,
+        &body,
+        &headers,
+        AppType::Codex,
+        "Codex Search",
+        "codex",
+    )
+    .await?;
     let endpoint = endpoint_with_query(&uri, "/alpha/search");
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder

@@ -2715,7 +2715,7 @@
       "validationFailed": "以下欄位超出有效範圍：{{fields}}",
       "retrySettings": "重試與逾時設定",
       "failureThreshold": "失敗閾值",
-      "failureThresholdHint": "連續失敗多少次後打開斷路器（建議：3-10）",
+      "failureThresholdHint": "連續失敗多少次後打開斷路器（最小 1，可自訂）",
       "timeout": "恢復等待時間（秒）",
       "timeoutHint": "斷路器打開後，等待多久後嘗試恢復（建議：30-120）",
       "circuitBreakerSettings": "斷路器設定",
@@ -2739,10 +2739,10 @@
       "streamingFirstByte": "串流首位元組逾時",
       "streamingIdle": "串流閒置逾時",
       "nonStreaming": "非串流逾時",
-      "maxRetriesHint": "請求失敗時的重試次數（0-10）",
-      "streamingFirstByteHint": "等待首個資料區塊的最大時間，範圍 1-120 秒，預設 60 秒",
-      "streamingIdleHint": "資料區塊之間的最大間隔，範圍 60-600 秒，填 0 停用（防止中途卡住）",
-      "nonStreamingHint": "非串流請求的總逾時時間，範圍 60-1200 秒，預設 600 秒（10 分鐘）"
+      "maxRetriesHint": "請求失敗時的重試次數（最小 0，可自訂）",
+      "streamingFirstByteHint": "等待首個資料區塊的最大時間，最小 1 秒，預設 60 秒",
+      "streamingIdleHint": "資料區塊之間的最大間隔，填 0 停用（防止中途卡住）",
+      "nonStreamingHint": "非串流請求的總逾時時間，最小 60 秒，預設 600 秒（10 分鐘）"
     },
     "logging": {
       "enabled": "日誌紀錄已啟用",

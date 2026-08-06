@@ -64,13 +64,13 @@ export function AutoFailoverConfigPanel({
       return parseInt(trimmed);
     };
 
-    // 定义各字段的有效范围
+    // 重试与超时字段只保留最低值，允许用户按上游特性自定义更大的值。
     const ranges = {
-      maxRetries: { min: 0, max: 10 },
-      streamingFirstByteTimeout: { min: 1, max: 120 },
-      streamingIdleTimeout: { min: 0, max: 600 },
-      nonStreamingTimeout: { min: 60, max: 1200 },
-      circuitFailureThreshold: { min: 1, max: 20 },
+      maxRetries: { min: 0 },
+      streamingFirstByteTimeout: { min: 1 },
+      streamingIdleTimeout: { min: 0 },
+      nonStreamingTimeout: { min: 60 },
+      circuitFailureThreshold: { min: 1 },
       circuitSuccessThreshold: { min: 1, max: 10 },
       circuitTimeoutSeconds: { min: 0, max: 300 },
       circuitErrorRateThreshold: { min: 0, max: 100 },
@@ -94,11 +94,19 @@ export function AutoFailoverConfigPanel({
     const errors: string[] = [];
     const checkRange = (
       value: number,
-      range: { min: number; max: number },
+      range: { min: number; max?: number },
       label: string,
     ) => {
-      if (isNaN(value) || value < range.min || value > range.max) {
-        errors.push(`${label}: ${range.min}-${range.max}`);
+      if (
+        isNaN(value) ||
+        value < range.min ||
+        (range.max !== undefined && value > range.max)
+      ) {
+        const expected =
+          range.max === undefined
+            ? `>= ${range.min}`
+            : `${range.min}-${range.max}`;
+        errors.push(`${label}: ${expected}`);
       }
     };
 
@@ -247,7 +255,6 @@ export function AutoFailoverConfigPanel({
                 id={`maxRetries-${appType}`}
                 type="number"
                 min="0"
-                max="10"
                 value={formData.maxRetries}
                 onChange={(e) =>
                   setFormData({ ...formData, maxRetries: e.target.value })
@@ -257,7 +264,7 @@ export function AutoFailoverConfigPanel({
               <p className="text-xs text-muted-foreground">
                 {t(
                   "proxy.autoFailover.maxRetriesHint",
-                  "请求失败时的重试次数（0-10）",
+                  "请求失败时的重试次数（最小 0，可自定义）",
                 )}
               </p>
             </div>
@@ -270,7 +277,6 @@ export function AutoFailoverConfigPanel({
                 id={`failureThreshold-${appType}`}
                 type="number"
                 min="1"
-                max="20"
                 value={formData.circuitFailureThreshold}
                 onChange={(e) =>
                   setFormData({
@@ -283,7 +289,7 @@ export function AutoFailoverConfigPanel({
               <p className="text-xs text-muted-foreground">
                 {t(
                   "proxy.autoFailover.failureThresholdHint",
-                  "连续失败多少次后打开熔断器（建议: 3-10）",
+                  "连续失败多少次后打开熔断器（最小 1，可自定义）",
                 )}
               </p>
             </div>
@@ -308,7 +314,6 @@ export function AutoFailoverConfigPanel({
                 id={`streamingFirstByte-${appType}`}
                 type="number"
                 min="1"
-                max="120"
                 value={formData.streamingFirstByteTimeout}
                 onChange={(e) =>
                   setFormData({
@@ -321,7 +326,7 @@ export function AutoFailoverConfigPanel({
               <p className="text-xs text-muted-foreground">
                 {t(
                   "proxy.autoFailover.streamingFirstByteHint",
-                  "等待首个数据块的最大时间，范围 1-120 秒，默认 60 秒",
+                  "等待首个数据块的最大时间，最小 1 秒，默认 60 秒",
                 )}
               </p>
             </div>
@@ -334,7 +339,6 @@ export function AutoFailoverConfigPanel({
                 id={`streamingIdle-${appType}`}
                 type="number"
                 min="0"
-                max="600"
                 value={formData.streamingIdleTimeout}
                 onChange={(e) =>
                   setFormData({
@@ -347,7 +351,7 @@ export function AutoFailoverConfigPanel({
               <p className="text-xs text-muted-foreground">
                 {t(
                   "proxy.autoFailover.streamingIdleHint",
-                  "数据块之间的最大间隔，范围 60-600 秒，填 0 禁用（防止中途卡住）",
+                  "数据块之间的最大间隔，填 0 禁用（防止中途卡住）",
                 )}
               </p>
             </div>
@@ -360,7 +364,6 @@ export function AutoFailoverConfigPanel({
                 id={`nonStreaming-${appType}`}
                 type="number"
                 min="60"
-                max="1200"
                 value={formData.nonStreamingTimeout}
                 onChange={(e) =>
                   setFormData({
@@ -373,7 +376,7 @@ export function AutoFailoverConfigPanel({
               <p className="text-xs text-muted-foreground">
                 {t(
                   "proxy.autoFailover.nonStreamingHint",
-                  "非流式请求的总超时时间，范围 60-1200 秒，默认 600 秒（10 分钟）",
+                  "非流式请求的总超时时间，最小 60 秒，默认 600 秒（10 分钟）",
                 )}
               </p>
             </div>

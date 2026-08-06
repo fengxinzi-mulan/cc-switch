@@ -332,10 +332,7 @@ impl ProxyServer {
             // prefixes as the Responses endpoint.
             .route("/alpha/search", post(handlers::handle_codex_search))
             .route("/v1/alpha/search", post(handlers::handle_codex_search))
-            .route(
-                "/v1/v1/alpha/search",
-                post(handlers::handle_codex_search),
-            )
+            .route("/v1/v1/alpha/search", post(handlers::handle_codex_search))
             .route(
                 "/codex/v1/alpha/search",
                 post(handlers::handle_codex_search),
