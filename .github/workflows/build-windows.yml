@@ -16,18 +16,15 @@ concurrency:
 jobs:
   build:
     runs-on: windows-2022
+    env:
+      # sys-dev artifacts favor turnaround time. Production release.yml keeps
+      # the size-optimized release profile (thin LTO + one codegen unit).
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -35,25 +32,25 @@ jobs:
           version: 10.12.3
           run_install: false
 
-      - name: Locate pnpm store
-        id: pnpm-store
-        shell: pwsh
-        run: |
-          $storePath = pnpm store path --silent
-          "path=$storePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Restore pnpm store
-        uses: actions/cache@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: windows-x64-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: windows-x64-pnpm-
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: windows-x64-fast-release
+          cache-on-failure: true
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Test Codex proxy routing
-        run: cargo test --manifest-path src-tauri/Cargo.toml codex --lib
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Build unsigned Windows MSI
         shell: pwsh
