@@ -3112,33 +3112,48 @@ impl ProviderService {
                     // Only backfill when switching to a different provider
                     if let Ok(live_config) = read_live_settings(app_type.clone()) {
                         if let Some(mut current_provider) = providers.get(&current_id).cloned() {
-                            // 切走前先把 live 里的可共享改动（含用户直接在应用内
-                            // 装插件/加 hook/改偏好）同步进通用配置片段，再做剥离回填。
-                            // 详见 sync_common_config_snippet_from_live 的文档。
-                            Self::sync_common_config_snippet_from_live(
-                                state,
-                                &app_type,
-                                &current_provider,
-                                &live_config,
-                                &mut result,
-                            );
-
-                            current_provider.settings_config =
-                                strip_common_config_from_live_settings(
-                                    state.db.as_ref(),
-                                    &app_type,
-                                    &current_provider,
-                                    live_config,
-                                );
-                            if let Err(e) =
-                                state.db.save_provider(app_type.as_str(), &current_provider)
+                            if matches!(app_type, AppType::Codex)
+                                && !crate::codex_config::codex_settings_have_same_upstream_route(
+                                    &live_config,
+                                    &current_provider.settings_config,
+                                )
                             {
-                                log::warn!("Backfill failed: {e}");
+                                log::warn!(
+                                    "跳过 Codex 供应商 '{}' 回填：Live 配置属于不同的上游路由",
+                                    current_provider.id
+                                );
                                 result
                                     .warnings
-                                    .push(format!("backfill_failed:{current_id}"));
+                                    .push(format!("backfill_route_mismatch:{current_id}"));
                             } else {
-                                backfill_completed = true;
+                                // 切走前先把 live 里的可共享改动（含用户直接在应用内
+                                // 装插件/加 hook/改偏好）同步进通用配置片段，再做剥离回填。
+                                // 详见 sync_common_config_snippet_from_live 的文档。
+                                Self::sync_common_config_snippet_from_live(
+                                    state,
+                                    &app_type,
+                                    &current_provider,
+                                    &live_config,
+                                    &mut result,
+                                );
+
+                                current_provider.settings_config =
+                                    strip_common_config_from_live_settings(
+                                        state.db.as_ref(),
+                                        &app_type,
+                                        &current_provider,
+                                        live_config,
+                                    );
+                                if let Err(e) =
+                                    state.db.save_provider(app_type.as_str(), &current_provider)
+                                {
+                                    log::warn!("Backfill failed: {e}");
+                                    result
+                                        .warnings
+                                        .push(format!("backfill_failed:{current_id}"));
+                                } else {
+                                    backfill_completed = true;
+                                }
                             }
                         }
                     }

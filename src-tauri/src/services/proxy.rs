@@ -1096,6 +1096,37 @@ impl ProxyService {
                         if crate::proxy::providers::is_codex_official_provider(&provider) {
                             return Ok(());
                         }
+
+                        // auth.json does not identify which third-party provider
+                        // owns its OPENAI_API_KEY. Before adopting that key into
+                        // the DB, require config.toml's upstream route to match
+                        // the logical current provider. During takeover startup
+                        // those two states can briefly disagree (for example
+                        // after a previous restore or an interrupted switch);
+                        // copying the key in that state permanently contaminates
+                        // the current provider with the previous provider's key.
+                        if !crate::codex_config::codex_settings_have_same_upstream_route(
+                            live_config,
+                            &provider.settings_config,
+                        ) {
+                            let live_base_url = live_config
+                                .get("config")
+                                .and_then(Value::as_str)
+                                .and_then(crate::codex_config::extract_codex_base_url);
+                            let provider_base_url = provider
+                                .settings_config
+                                .get("config")
+                                .and_then(Value::as_str)
+                                .and_then(crate::codex_config::extract_codex_base_url);
+                            log::warn!(
+                                "跳过 Codex Live Token 回填：Live 路由 {:?} 不属于当前供应商 {}（配置路由 {:?}）",
+                                live_base_url,
+                                provider_id,
+                                provider_base_url
+                            );
+                            return Ok(());
+                        }
+
                         if let Some(token) = live_config
                             .get("auth")
                             .and_then(|v| v.get("OPENAI_API_KEY"))
@@ -1845,12 +1876,39 @@ impl ProxyService {
             let config: Value = serde_json::from_str(&backup.original_config)
                 .map_err(|e| format!("解析 {app_type_str} 备份失败: {e}"))?;
 
+            let codex_backup_matches_current = if matches!(app_type, AppType::Codex) {
+                self.get_current_provider_for_app(&AppType::Codex)
+                    .ok()
+                    .flatten()
+                    .map(|provider| {
+                        if crate::proxy::providers::is_codex_official_provider(&provider) {
+                            config
+                                .get("config")
+                                .and_then(Value::as_str)
+                                .and_then(crate::codex_config::extract_codex_base_url)
+                                .is_none()
+                        } else {
+                            crate::codex_config::codex_settings_have_same_upstream_route(
+                                &config,
+                                &provider.settings_config,
+                            )
+                        }
+                    })
+                    .unwrap_or(true)
+            } else {
+                true
+            };
+
             // 备份若是代理占位符（异常历史：上次 stop 失败导致 Live 留在了代理状态，
             // 下次接管时又被错误地备份成"原始 Live"），不能直接用 — 否则 stop 后
             // Live 永远卡在 127.0.0.1:15721。落到下面的 SSOT 兜底重建。
             if Self::live_has_proxy_placeholder_for_app(app_type, &config) {
                 log::warn!(
                     "{app_type_str} 备份本身已是代理占位符（异常历史状态），跳过备份，改走 SSOT 重建 Live"
+                );
+            } else if !codex_backup_matches_current {
+                log::warn!(
+                    "Codex Live 备份属于其他上游路由，跳过备份并从当前供应商 SSOT 重建"
                 );
             } else {
                 self.write_live_config_for_app(app_type, &config)?;
@@ -4342,6 +4400,87 @@ wire_api = "responses"
 
     #[tokio::test]
     #[serial]
+    async fn codex_sync_live_only_adopts_key_when_route_matches_current_provider() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        let provider = Provider::with_id(
+            "input".to_string(),
+            "Input".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "input-key" },
+                "config": r#"model_provider = "input"
+
+[model_providers.input]
+name = "Input"
+base_url = "https://input.example/v1/"
+wire_api = "responses"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider)
+            .expect("save input provider");
+        db.set_current_provider("codex", "input")
+            .expect("set DB current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("input"))
+            .expect("set local current provider");
+
+        let previous_provider_live = json!({
+            "auth": { "OPENAI_API_KEY": "previous-provider-key" },
+            "config": r#"model_provider = "previous"
+
+[model_providers.previous]
+name = "Previous"
+base_url = "https://previous.example/v1"
+wire_api = "responses"
+"#
+        });
+        service
+            .sync_live_config_to_provider(&AppType::Codex, &previous_provider_live)
+            .await
+            .expect("ignore mismatched live route");
+
+        let stored = db
+            .get_provider_by_id("input", "codex")
+            .expect("read input provider")
+            .expect("input provider exists");
+        assert_eq!(
+            stored.settings_config["auth"]["OPENAI_API_KEY"],
+            json!("input-key"),
+            "a previous provider's live key must not overwrite the logical current provider"
+        );
+
+        let matching_live = json!({
+            "auth": { "OPENAI_API_KEY": "input-key-refreshed" },
+            "config": r#"model_provider = "input"
+
+[model_providers.input]
+name = "Input"
+base_url = "https://input.example/v1"
+wire_api = "responses"
+"#
+        });
+        service
+            .sync_live_config_to_provider(&AppType::Codex, &matching_live)
+            .await
+            .expect("sync matching live route");
+
+        let stored = db
+            .get_provider_by_id("input", "codex")
+            .expect("read refreshed input provider")
+            .expect("input provider exists");
+        assert_eq!(
+            stored.settings_config["auth"]["OPENAI_API_KEY"],
+            json!("input-key-refreshed"),
+            "the matching provider must still adopt its live key"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn codex_set_takeover_for_app_preserves_oauth_auth_json_when_preserve_enabled() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
@@ -6810,6 +6949,70 @@ requires_openai_auth = true
         assert!(
             restored.contains(pointer.as_str()),
             "restored pointer must still reference the cc-switch generated catalog file"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_restore_skips_backup_owned_by_previous_provider() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+        let current = Provider::with_id(
+            "input".to_string(),
+            "Input".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "input-key" },
+                "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"Input\"\nbase_url = \"https://input.example/v1\"\nwire_api = \"responses\"\n"
+            }),
+            None,
+        );
+        db.save_provider("codex", &current)
+            .expect("save current provider");
+        db.set_current_provider("codex", "input")
+            .expect("set DB current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("input"))
+            .expect("set local current provider");
+
+        let previous_backup = json!({
+            "auth": { "OPENAI_API_KEY": "previous-key" },
+            "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"Previous\"\nbase_url = \"https://previous.example/v1\"\nwire_api = \"responses\"\n"
+        });
+        db.save_live_backup(
+            "codex",
+            &serde_json::to_string(&previous_backup).expect("serialize previous backup"),
+        )
+        .await
+        .expect("save previous provider backup");
+        crate::codex_config::write_codex_live_atomic(
+            &json!({ "OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER }),
+            Some(
+                "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"Input\"\nbase_url = \"http://127.0.0.1:15721/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"PROXY_MANAGED\"\n",
+            ),
+        )
+        .expect("seed takeover live config");
+
+        service
+            .restore_live_config_for_app_with_fallback(&AppType::Codex)
+            .await
+            .expect("restore current provider from SSOT");
+
+        let restored = service.read_codex_live().expect("read restored live config");
+        assert_eq!(
+            restored["auth"]["OPENAI_API_KEY"],
+            json!("input-key"),
+            "restore must not bring back the previous provider's key"
+        );
+        assert_eq!(
+            restored
+                .get("config")
+                .and_then(Value::as_str)
+                .and_then(crate::codex_config::extract_codex_base_url)
+                .as_deref(),
+            Some("https://input.example/v1"),
+            "restore must rebuild Live from the logical current provider"
         );
     }
 

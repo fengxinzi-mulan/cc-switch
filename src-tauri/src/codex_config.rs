@@ -370,6 +370,30 @@ pub fn extract_codex_base_url(config_text: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Compare the upstream route represented by two Codex settings snapshots.
+///
+/// `auth.json` has no provider identity, so callers that copy credentials or
+/// backfill a provider from Live must first prove that Live's `config.toml`
+/// belongs to the stored provider. URL parsing normalizes scheme/host/default
+/// ports and this helper deliberately ignores only a trailing slash/fragment.
+/// Missing or invalid routes fail closed.
+pub fn codex_settings_have_same_upstream_route(left: &Value, right: &Value) -> bool {
+    fn normalized_base_url(settings: &Value) -> Option<String> {
+        let config = settings.get("config").and_then(Value::as_str)?;
+        let base_url = extract_codex_base_url(config)?;
+        let mut parsed = url::Url::parse(base_url.trim()).ok()?;
+        parsed.set_fragment(None);
+        let normalized_path = parsed.path().trim_end_matches('/').to_string();
+        parsed.set_path(&normalized_path);
+        Some(parsed.to_string().trim_end_matches('/').to_string())
+    }
+
+    matches!(
+        (normalized_base_url(left), normalized_base_url(right)),
+        (Some(left), Some(right)) if left == right
+    )
+}
+
 pub fn codex_auth_has_login_material(auth: &Value) -> bool {
     let Some(obj) = auth.as_object() else {
         return false;
@@ -2648,6 +2672,35 @@ base_url = "https://leftover.example.com/v1"
 base_url = "https://single.example.com/v1"
 "#;
         assert_eq!(extract_codex_base_url(no_active), None);
+    }
+
+    #[test]
+    fn codex_route_match_normalizes_trailing_slash_and_rejects_other_provider() {
+        let stored = json!({
+            "config": r#"model_provider = "custom"
+[model_providers.custom]
+base_url = "https://input.example/v1/"
+"#
+        });
+        let same_live = json!({
+            "config": r#"model_provider = "custom"
+[model_providers.custom]
+base_url = "https://INPUT.example/v1"
+"#
+        });
+        let other_live = json!({
+            "config": r#"model_provider = "custom"
+[model_providers.custom]
+base_url = "https://previous.example/v1"
+"#
+        });
+
+        assert!(codex_settings_have_same_upstream_route(&same_live, &stored));
+        assert!(!codex_settings_have_same_upstream_route(&other_live, &stored));
+        assert!(!codex_settings_have_same_upstream_route(
+            &json!({ "config": "model = \"gpt-5\"\n" }),
+            &stored
+        ));
     }
 
     #[test]
