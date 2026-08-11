@@ -29,12 +29,24 @@ fn next_codex_credential_trace_id() -> u64 {
 }
 
 fn codex_api_key_fingerprint(settings: &Value) -> String {
-    settings
+    let route_bound_key = settings
+        .get("config")
+        .and_then(Value::as_str)
+        .and_then(crate::codex_config::extract_codex_experimental_bearer_token);
+    let auth_key = settings
         .get("auth")
         .and_then(|auth| auth.get("OPENAI_API_KEY"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|key| !key.is_empty())
+        .map(str::to_string);
+
+    if route_bound_key.as_deref() == Some(PROXY_TOKEN_PLACEHOLDER) {
+        return "proxy-managed".to_string();
+    }
+
+    route_bound_key
+        .or(auth_key)
         .map(|key| {
             let digest = Sha256::digest(key.as_bytes());
             format!("sha256:{:x}", digest)[..19].to_string()
@@ -1230,19 +1242,36 @@ impl ProxyService {
                             return Ok(());
                         }
 
-                        if let Some(token) = live_config
+                        let route_bound_token = live_config
+                            .get("config")
+                            .and_then(Value::as_str)
+                            .and_then(
+                                crate::codex_config::extract_codex_experimental_bearer_token,
+                            )
+                            .map(|token| token.trim().to_string())
+                            .filter(|token| {
+                                !token.is_empty() && token.as_str() != PROXY_TOKEN_PLACEHOLDER
+                            });
+                        let auth_token = live_config
                             .get("auth")
                             .and_then(|v| v.get("OPENAI_API_KEY"))
                             .and_then(|v| v.as_str())
                             .map(|s| s.trim())
                             .filter(|s| !s.is_empty() && *s != PROXY_TOKEN_PLACEHOLDER)
-                        {
+                            .map(str::to_string);
+                        let (token, token_source) = match route_bound_token {
+                            Some(token) => (Some(token), "config.experimental_bearer_token"),
+                            None => (auth_token, "auth.OPENAI_API_KEY"),
+                        };
+
+                        if let Some(token) = token {
                             if let Some(auth_obj) = provider
                                 .settings_config
                                 .get_mut("auth")
                                 .and_then(|v| v.as_object_mut())
                             {
-                                auth_obj.insert("OPENAI_API_KEY".to_string(), json!(token));
+                                auth_obj
+                                    .insert("OPENAI_API_KEY".to_string(), json!(&token));
                             } else {
                                 if provider.settings_config.is_null() {
                                     provider.settings_config = json!({});
@@ -1251,7 +1280,7 @@ impl ProxyService {
                                 if let Some(root) = provider.settings_config.as_object_mut() {
                                     root.insert(
                                         "auth".to_string(),
-                                        json!({ "OPENAI_API_KEY": token }),
+                                        json!({ "OPENAI_API_KEY": &token }),
                                     );
                                 } else {
                                     log::warn!(
@@ -1268,10 +1297,11 @@ impl ProxyService {
                                 log::warn!("同步 Codex Token 到数据库失败: {e}");
                             } else {
                                 log::info!(
-                                    "[CodexCredentialTrace] live backfill committed provider={} route={} key={}",
+                                    "[CodexCredentialTrace] live backfill committed provider={} route={} key={} source={}",
                                     provider_id,
                                     codex_route_for_log(&provider.settings_config),
-                                    codex_api_key_fingerprint(&provider.settings_config)
+                                    codex_api_key_fingerprint(&provider.settings_config),
+                                    token_source
                                 );
                             }
                         }
@@ -4741,6 +4771,63 @@ wire_api = "responses"
             stored.settings_config["auth"]["OPENAI_API_KEY"],
             json!("input-key-refreshed"),
             "the matching provider must still adopt its live key"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_sync_live_prefers_route_bound_key_over_preserved_auth_key() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        let provider = Provider::with_id(
+            "input".to_string(),
+            "Input".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "input-key" },
+                "config": r#"model_provider = "input"
+
+[model_providers.input]
+name = "Input"
+base_url = "https://input.example/v1"
+wire_api = "responses"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider)
+            .expect("save input provider");
+        db.set_current_provider("codex", "input")
+            .expect("set DB current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("input"))
+            .expect("set local current provider");
+
+        let matching_live_with_preserved_auth = json!({
+            "auth": { "OPENAI_API_KEY": "previous-provider-key" },
+            "config": r#"model_provider = "input"
+
+[model_providers.input]
+name = "Input"
+base_url = "https://input.example/v1"
+wire_api = "responses"
+experimental_bearer_token = "input-route-bound-key"
+"#
+        });
+        service
+            .sync_live_config_to_provider(&AppType::Codex, &matching_live_with_preserved_auth)
+            .await
+            .expect("sync matching live route");
+
+        let stored = db
+            .get_provider_by_id("input", "codex")
+            .expect("read input provider")
+            .expect("input provider exists");
+        assert_eq!(
+            stored.settings_config["auth"]["OPENAI_API_KEY"],
+            json!("input-route-bound-key"),
+            "the route-bound bearer token must win over a preserved auth.json key"
         );
     }
 
