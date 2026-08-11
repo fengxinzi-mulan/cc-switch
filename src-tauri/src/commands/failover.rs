@@ -39,10 +39,24 @@ pub async fn add_to_failover_queue(
     app_type: String,
     provider_id: String,
 ) -> Result<(), String> {
+    log::info!(
+        "[FailoverTrace] queue add requested app_type={app_type} provider_id={provider_id}"
+    );
     state
         .db
         .add_to_failover_queue(&app_type, &provider_id)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let queue = state
+        .db
+        .get_failover_queue(&app_type)
+        .map_err(|e| e.to_string())?;
+    log::info!(
+        "[FailoverTrace] queue add committed app_type={} provider_id={} queue={:?}",
+        app_type,
+        provider_id,
+        queue.iter().map(|item| item.provider_id.as_str()).collect::<Vec<_>>()
+    );
+    Ok(())
 }
 
 /// 从故障转移队列移除供应商
@@ -52,10 +66,24 @@ pub async fn remove_from_failover_queue(
     app_type: String,
     provider_id: String,
 ) -> Result<(), String> {
+    log::info!(
+        "[FailoverTrace] queue remove requested app_type={app_type} provider_id={provider_id}"
+    );
     state
         .db
         .remove_from_failover_queue(&app_type, &provider_id)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let queue = state
+        .db
+        .get_failover_queue(&app_type)
+        .map_err(|e| e.to_string())?;
+    log::info!(
+        "[FailoverTrace] queue remove committed app_type={} provider_id={} queue={:?}",
+        app_type,
+        provider_id,
+        queue.iter().map(|item| item.provider_id.as_str()).collect::<Vec<_>>()
+    );
+    Ok(())
 }
 
 /// 获取指定应用的自动故障转移开关状态（从 proxy_config 表读取）
@@ -160,6 +188,13 @@ pub async fn set_auto_failover_enabled(
         .update_proxy_config_for_app(config)
         .await
         .map_err(|e| e.to_string())?;
+
+    log::info!(
+        "[FailoverTrace] auto failover committed app_type={} enabled={} p1_provider={}",
+        app_type,
+        enabled,
+        if p1_provider_id.is_empty() { "none" } else { &p1_provider_id }
+    );
 
     if enabled {
         // 发射 provider-switched 事件（让前端刷新当前供应商）

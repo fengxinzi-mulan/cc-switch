@@ -2604,6 +2604,19 @@ impl ProviderService {
         original_id: Option<&str>,
         provider: Provider,
     ) -> Result<bool, AppError> {
+        // Editing the current provider can update the DB, takeover backup, and
+        // proxy-owned Live projection. Keep that whole sequence in the same
+        // per-app transaction domain as takeover toggles and provider switches.
+        let _switch_guard = if matches!(
+            app_type,
+            AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild
+        ) {
+            Some(futures::executor::block_on(
+                state.proxy_service.lock_switch_for_app(app_type.as_str()),
+            ))
+        } else {
+            None
+        };
         let mut provider = provider;
         let original_id = original_id.unwrap_or(provider.id.as_str()).to_string();
         let provider_id_changed = original_id != provider.id;
@@ -2772,13 +2785,21 @@ impl ProviderService {
             let should_sync_via_proxy = has_live_backup || live_taken_over;
 
             if should_sync_via_proxy {
+                if matches!(app_type, AppType::Codex) {
+                    log::info!(
+                        "[CodexCredentialTrace] provider edit uses takeover backup provider={} backup_present={} live_taken_over={}",
+                        provider.id,
+                        has_live_backup,
+                        live_taken_over
+                    );
+                }
                 if matches!(app_type, AppType::ClaudeDesktop) {
                     write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
                 } else {
                     futures::executor::block_on(
                         state
                             .proxy_service
-                            .update_live_backup_from_provider(app_type.as_str(), &provider),
+                            .update_live_backup_from_provider_inner(app_type.as_str(), &provider),
                     )
                     .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
                 }
@@ -2964,6 +2985,9 @@ impl ProviderService {
     ///    d. Write target provider config to live files
     ///    e. Sync MCP configuration
     pub fn switch(state: &AppState, app_type: AppType, id: &str) -> Result<SwitchResult, AppError> {
+        if matches!(app_type, AppType::Codex) {
+            log::info!("[CodexCredentialTrace] provider switch requested target_provider={id}");
+        }
         // OMO variants take an exclusive path below and do not use the
         // per-app switch lock. Validate those entries before branching; the
         // normal provider paths refresh this snapshot after locking.
@@ -3027,6 +3051,16 @@ impl ProviderService {
             .detect_takeover_in_live_config_for_app(&app_type);
 
         let should_hot_switch = is_app_taken_over || live_taken_over;
+
+        if matches!(app_type, AppType::Codex) {
+            log::info!(
+                "[CodexCredentialTrace] provider switch decision target_provider={} backup_present={} live_taken_over={} mode={}",
+                id,
+                is_app_taken_over,
+                live_taken_over,
+                if should_hot_switch { "hot" } else { "normal" }
+            );
+        }
 
         // Block switching to official providers when proxy takeover is active.
         // Using a proxy with official APIs (Anthropic/OpenAI/Google) may cause account bans.
@@ -3119,7 +3153,7 @@ impl ProviderService {
                                 )
                             {
                                 log::warn!(
-                                    "跳过 Codex 供应商 '{}' 回填：Live 配置属于不同的上游路由",
+                                    "[CodexCredentialTrace] normal switch backfill rejected provider='{}': Live config belongs to another upstream route",
                                     current_provider.id
                                 );
                                 result
@@ -3153,6 +3187,11 @@ impl ProviderService {
                                         .push(format!("backfill_failed:{current_id}"));
                                 } else {
                                     backfill_completed = true;
+                                    if matches!(app_type, AppType::Codex) {
+                                        log::info!(
+                                            "[CodexCredentialTrace] normal switch backfill committed provider={current_id}"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -3172,6 +3211,11 @@ impl ProviderService {
 
         // Sync to live (write_gemini_live handles security flag internally for Gemini)
         write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
+        if matches!(app_type, AppType::Codex) {
+            log::info!(
+                "[CodexCredentialTrace] normal switch committed target_provider={id} backfill_completed={backfill_completed}"
+            );
+        }
 
         // A material-less official Codex provider gets a config-only live
         // write, which can leave the previous third-party key in
