@@ -2964,26 +2964,34 @@ impl ProviderService {
     ///    d. Write target provider config to live files
     ///    e. Sync MCP configuration
     pub fn switch(state: &AppState, app_type: AppType, id: &str) -> Result<SwitchResult, AppError> {
-        // Check if provider exists
-        let providers = state.db.get_all_providers(app_type.as_str())?;
-        let _provider = providers
+        // OMO variants take an exclusive path below and do not use the
+        // per-app switch lock. Validate those entries before branching; the
+        // normal provider paths refresh this snapshot after locking.
+        let initial_providers = state.db.get_all_providers(app_type.as_str())?;
+        let initial_provider = initial_providers
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
+        // Provider switches race with takeover hot-switches and provider edits.
+        // The lock must be acquired before reading the provider snapshot; a
+        // pre-lock snapshot can otherwise mix a target from the old DB state
+        // with the current/live state committed by the preceding operation.
 
         // OMO providers are switched through their own exclusive path.
-        if matches!(app_type, AppType::OpenCode) && _provider.category.as_deref() == Some("omo") {
-            return Self::switch_normal(state, app_type, id, &providers);
+        if matches!(app_type, AppType::OpenCode)
+            && initial_provider.category.as_deref() == Some("omo")
+        {
+            return Self::switch_normal(state, app_type, id, &initial_providers);
         }
 
         // OMO Slim providers are switched through their own exclusive path.
         if matches!(app_type, AppType::OpenCode)
-            && _provider.category.as_deref() == Some("omo-slim")
+            && initial_provider.category.as_deref() == Some("omo-slim")
         {
-            return Self::switch_normal(state, app_type, id, &providers);
+            return Self::switch_normal(state, app_type, id, &initial_providers);
         }
 
         if matches!(app_type, AppType::ClaudeDesktop) {
-            return Self::switch_normal(state, app_type, id, &providers);
+            return Self::switch_normal(state, app_type, id, &initial_providers);
         }
 
         // Provider switches and takeover toggles both mutate live config and the
@@ -3000,6 +3008,11 @@ impl ProviderService {
         } else {
             None
         };
+
+        let providers = state.db.get_all_providers(app_type.as_str())?;
+        let _provider = providers
+            .get(id)
+            .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
 
         // Backup or live placeholders mean the live file is owned by proxy
         // takeover, even if the proxy server is temporarily stopped or is in the
