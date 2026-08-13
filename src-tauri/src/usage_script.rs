@@ -15,9 +15,10 @@ pub async fn execute_usage_script(
     user_id: Option<&str>,
     template_type: Option<&str>,
 ) -> Result<Value, AppError> {
-    // 检测是否为自定义模板模式
-    // 优先使用前端传递的 template_type
+    // 自定义脚本保留宽松 URL 行为；Sub2API 常见于局域网自托管实例，
+    // 因此允许 HTTP，但仍执行与 provider base_url 的同源检查。
     let is_custom_template = template_type.map(|t| t == "custom").unwrap_or(false);
+    let allow_http = is_custom_template || template_type == Some("sub2api");
 
     // 1. 替换模板变量，避免泄露敏感信息
     let script_with_vars =
@@ -26,7 +27,7 @@ pub async fn execute_usage_script(
     // 2. 验证 base_url 的安全性（仅当提供了 base_url 时）
     // 自定义模板模式下，用户可能不使用模板变量，而是直接在脚本中写完整 URL
     if should_validate_base_url(base_url, is_custom_template) {
-        validate_base_url(base_url)?;
+        validate_base_url(base_url, allow_http)?;
     }
 
     // 3. 在独立作用域中提取 request 配置（确保 Runtime/Context 在 await 前释放）
@@ -135,7 +136,7 @@ pub async fn execute_usage_script(
     })?;
 
     // 5. 验证请求 URL（HTTPS 强制 + 同源检查）
-    validate_request_url(&request.url, base_url, is_custom_template)?;
+    validate_request_url(&request.url, base_url, allow_http, is_custom_template)?;
 
     // 6. 发送 HTTP 请求
     let response_data = send_http_request(&request, timeout_secs).await?;
@@ -444,7 +445,7 @@ fn build_script_with_vars(
 }
 
 /// 验证 base_url 的基本安全性
-fn validate_base_url(base_url: &str) -> Result<(), AppError> {
+fn validate_base_url(base_url: &str, allow_http: bool) -> Result<(), AppError> {
     if base_url.is_empty() {
         return Err(AppError::localized(
             "usage_script.base_url_empty",
@@ -464,8 +465,9 @@ fn validate_base_url(base_url: &str) -> Result<(), AppError> {
 
     let is_loopback = is_loopback_host(&parsed_url);
 
-    // 必须是 HTTPS（允许 localhost 用于开发）
-    if parsed_url.scheme() != "https" && !is_loopback {
+    // 内置模板默认必须使用 HTTPS；明确支持自托管 HTTP 的模板可放宽到 HTTP。
+    let is_allowed_http = allow_http && parsed_url.scheme() == "http";
+    if parsed_url.scheme() != "https" && !is_allowed_http && !is_loopback {
         return Err(AppError::localized(
             "usage_script.base_url_https_required",
             "base_url 必须使用 HTTPS 协议（localhost 除外）",
@@ -502,6 +504,7 @@ fn should_validate_base_url(base_url: &str, is_custom_template: bool) -> bool {
 fn validate_request_url(
     request_url: &str,
     base_url: &str,
+    allow_http: bool,
     is_custom_template: bool,
 ) -> Result<(), AppError> {
     // 解析请求 URL
@@ -515,9 +518,9 @@ fn validate_request_url(
 
     let is_request_loopback = is_loopback_host(&parsed_request);
 
-    // 必须使用 HTTPS（允许 localhost 用于开发）
-    // 自定义模板模式下，允许用户自行决定是否使用 HTTP（用户需自行承担安全风险）
-    if !is_custom_template && parsed_request.scheme() != "https" && !is_request_loopback {
+    // 内置模板默认必须使用 HTTPS；自定义与 Sub2API 模板允许 HTTP。
+    let is_allowed_http = allow_http && parsed_request.scheme() == "http";
+    if parsed_request.scheme() != "https" && !is_allowed_http && !is_request_loopback {
         return Err(AppError::localized(
             "usage_script.request_https_required",
             "请求 URL 必须使用 HTTPS 协议（localhost 除外）",
@@ -601,7 +604,7 @@ mod tests {
     #[test]
     fn test_https_bypass_prevention() {
         // 非本地域名的 HTTP 应该被拒绝
-        let result = validate_base_url("http://127.0.0.1.evil.com/api");
+        let result = validate_base_url("http://127.0.0.1.evil.com/api", false);
         assert!(
             result.is_err(),
             "Should reject HTTP for non-localhost domains"
@@ -618,6 +621,7 @@ mod tests {
         let result = validate_request_url(
             "http://10.37.192.156:18344/user/balance",
             "http://10.37.192.156:8090/anthropic",
+            true,
             true,
         );
         assert!(
@@ -667,7 +671,7 @@ mod tests {
         ];
 
         for (base_url, request_url, should_match) in test_cases {
-            let result = validate_request_url(request_url, base_url, false);
+            let result = validate_request_url(request_url, base_url, false, false);
 
             if should_match {
                 assert!(
@@ -686,6 +690,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn sub2api_template_allows_http_but_keeps_same_origin_validation() {
+        let base_url = "http://192.168.1.20:8080/v1";
+
+        assert!(validate_base_url(base_url, true).is_ok());
+        assert!(
+            validate_request_url("http://192.168.1.20:8080/v1/usage", base_url, true, false,)
+                .is_ok()
+        );
+        assert!(
+            validate_request_url("http://192.168.1.21:8080/v1/usage", base_url, true, false,)
+                .is_err()
+        );
+        assert!(
+            validate_request_url("http://192.168.1.20:8081/v1/usage", base_url, true, false,)
+                .is_err()
+        );
     }
 
     #[test]

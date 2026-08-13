@@ -25,6 +25,19 @@ function asPlans(value: Record<string, any> | any[]): Record<string, any>[] {
   return Array.isArray(value) ? value : [value];
 }
 
+function expectedLocalTime(value: string | number): string {
+  const timestamp =
+    typeof value === "number" && Math.abs(value) < 100_000_000_000
+      ? value * 1000
+      : value;
+  const date = new Date(timestamp);
+  const pad = (number: number) => String(number).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
 describe("Sub2API usage template", () => {
   it.each([
     ["https://sub2api.example.com", "https://sub2api.example.com/v1/usage"],
@@ -82,15 +95,43 @@ describe("Sub2API usage template", () => {
         remaining: 37.5,
         unit: "USD",
         isValid: true,
+        extra: `Expires: ${expectedLocalTime("2026-09-01T00:00:00Z")}`,
       }),
       expect.objectContaining({
         planName: "API Key / 5h",
         total: 10,
         used: 3,
         remaining: 7,
-        extra: expect.stringContaining("Reset: 2026-08-14T00:00:00Z"),
+        extra:
+          `Reset: ${expectedLocalTime("2026-08-14T00:00:00Z")} / ` +
+          `Expires: ${expectedLocalTime("2026-09-01T00:00:00Z")}`,
       }),
     ]);
+  });
+
+  it("formats ISO and Unix timestamps in the machine's local timezone", () => {
+    const unixSeconds = 1_787_872_400;
+    const result = asPlans(
+      instantiate().extractor({
+        isValid: true,
+        quota: { limit: 10, used: 1, remaining: 9, unit: "USD" },
+        expires_at: unixSeconds,
+        rate_limits: [
+          {
+            window: "1d",
+            limit: 5,
+            used: 1,
+            remaining: 4,
+            reset_at: "not-a-standard-date",
+          },
+        ],
+      }),
+    );
+
+    expect(result[0].extra).toBe(`Expires: ${expectedLocalTime(unixSeconds)}`);
+    expect(result[1].extra).toBe(
+      `Reset: not-a-standard-date / Expires: ${expectedLocalTime(unixSeconds)}`,
+    );
   });
 
   it("maps rate-only API keys without requiring a top-level balance", () => {

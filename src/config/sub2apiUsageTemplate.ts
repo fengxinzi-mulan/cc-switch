@@ -15,12 +15,29 @@ export const SUB2API_USAGE_TEMPLATE = `({
     }
   },
   extractor: function(response) {
+    function formatLocalTime(value) {
+      if (value === undefined || value === null || value === "") return undefined;
+      var timestamp = value;
+      if (typeof timestamp === "number" && Math.abs(timestamp) < 100000000000) {
+        timestamp *= 1000;
+      }
+      var date = new Date(timestamp);
+      if (isNaN(date.getTime())) return String(value);
+      function pad(number) {
+        return String(number).padStart(2, "0");
+      }
+      return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" +
+        pad(date.getDate()) + " " + pad(date.getHours()) + ":" +
+        pad(date.getMinutes());
+    }
+
     var isValid = response.isValid ?? response.is_active ??
       (response.success !== false && !response.error);
     var unit = response.unit ?? response.quota?.unit ?? "USD";
     var invalidMessage = response.error?.message ?? response.message ?? response.status;
     var expiresAt = response.expires_at ?? response.subscription?.expires_at;
-    var expiryText = expiresAt ? "Expires: " + expiresAt : undefined;
+    var formattedExpiry = formatLocalTime(expiresAt);
+    var expiryText = formattedExpiry ? "Expires: " + formattedExpiry : undefined;
     var plans = [];
 
     function appendPlan(planName, total, used, remaining, extra) {
@@ -50,7 +67,8 @@ export const SUB2API_USAGE_TEMPLATE = `({
     if (Array.isArray(response.rate_limits)) {
       response.rate_limits.forEach(function(limit) {
         var details = [];
-        if (limit.reset_at) details.push("Reset: " + limit.reset_at);
+        var formattedReset = formatLocalTime(limit.reset_at);
+        if (formattedReset) details.push("Reset: " + formattedReset);
         if (expiryText) details.push(expiryText);
         appendPlan(
           (response.planName ?? "API Key") + " / " + limit.window,
