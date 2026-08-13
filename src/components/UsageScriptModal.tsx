@@ -26,11 +26,16 @@ import { Switch } from "@/components/ui/switch";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/utils";
-import { TEMPLATE_TYPES, PROVIDER_TYPES } from "@/config/constants";
+import {
+  TEMPLATE_TYPES,
+  PROVIDER_TYPES,
+  type TemplateType,
+} from "@/config/constants";
 import {
   CODING_PLAN_PROVIDERS,
   detectCodingPlanProvider,
 } from "@/config/codingPlanProviders";
+import { SUB2API_USAGE_TEMPLATE } from "@/config/sub2apiUsageTemplate";
 import { formatUsageDataSummary } from "@/utils/usageDisplay";
 
 /**
@@ -115,6 +120,8 @@ const generatePresetTemplates = (
   },
 })`,
 
+  [TEMPLATE_TYPES.SUB2API]: SUB2API_USAGE_TEMPLATE,
+
   // GitHub Copilot 模板不需要脚本，使用专用 API
   [TEMPLATE_TYPES.GITHUB_COPILOT]: "",
 
@@ -133,6 +140,7 @@ const TEMPLATE_NAME_KEYS: Record<string, string> = {
   [TEMPLATE_TYPES.CUSTOM]: "usageScript.templateCustom",
   [TEMPLATE_TYPES.GENERAL]: "usageScript.templateGeneral",
   [TEMPLATE_TYPES.NEW_API]: "usageScript.templateNewAPI",
+  [TEMPLATE_TYPES.SUB2API]: "usageScript.templateSub2API",
   [TEMPLATE_TYPES.GITHUB_COPILOT]: "usageScript.templateCopilot",
   [TEMPLATE_TYPES.TOKEN_PLAN]: "usageScript.templateTokenPlan",
   [TEMPLATE_TYPES.BALANCE]: "usageScript.templateBalance",
@@ -496,15 +504,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
     // 保存时记录当前选择的模板类型
     const scriptWithTemplate = {
       ...script,
-      templateType: selectedTemplate as
-        | "custom"
-        | "general"
-        | "newapi"
-        | "github_copilot"
-        | "token_plan"
-        | "balance"
-        | "official_subscription"
-        | undefined,
+      templateType: selectedTemplate as TemplateType | undefined,
     };
     onSave(scriptWithTemplate);
     onClose();
@@ -658,7 +658,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         script.baseUrl,
         script.accessToken,
         script.userId,
-        selectedTemplate as "custom" | "general" | "newapi" | undefined,
+        selectedTemplate as TemplateType | undefined,
       );
       if (result.success && result.data && result.data.length > 0) {
         const summary = result.data
@@ -739,7 +739,10 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
           accessToken: undefined,
           userId: undefined,
         });
-      } else if (presetName === TEMPLATE_TYPES.GENERAL) {
+      } else if (
+        presetName === TEMPLATE_TYPES.GENERAL ||
+        presetName === TEMPLATE_TYPES.SUB2API
+      ) {
         setScript({
           ...script,
           code: preset,
@@ -814,6 +817,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
 
   const shouldShowCredentialsConfig =
     selectedTemplate === TEMPLATE_TYPES.GENERAL ||
+    selectedTemplate === TEMPLATE_TYPES.SUB2API ||
     selectedTemplate === TEMPLATE_TYPES.NEW_API ||
     (selectedTemplate === TEMPLATE_TYPES.TOKEN_PLAN &&
       script.codingPlanProvider === "zenmux");
@@ -1087,7 +1091,8 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
-                  {selectedTemplate === TEMPLATE_TYPES.GENERAL && (
+                  {(selectedTemplate === TEMPLATE_TYPES.GENERAL ||
+                    selectedTemplate === TEMPLATE_TYPES.SUB2API) && (
                     <>
                       <div className="space-y-2">
                         <Label htmlFor="usage-api-key">
