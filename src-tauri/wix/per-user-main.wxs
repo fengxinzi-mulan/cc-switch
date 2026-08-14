@@ -20,15 +20,15 @@
             Manufacturer="{{manufacturer}}"
             Version="{{version}}">
 
-        <!-- Keep per-user registration, but elevate file operations so Windows Installer
-             can manage its protected Config.Msi rollback directories on every volume. -->
+        <!-- WiX requires per-user packages to use limited install privileges.
+             Stale Config.Msi rollback state must be repaired outside the package. -->
         <Package Id="*"
                  Keywords="Installer"
                  InstallerVersion="450"
                  Languages="0"
                  Compressed="yes"
                  InstallScope="perUser"
-                 InstallPrivileges="elevated"
+                 InstallPrivileges="limited"
                  SummaryCodepage="!(loc.TauriCodepage)"/>
 
         <!-- https://docs.microsoft.com/en-us/windows/win32/msi/reinstallmode -->
