@@ -159,6 +159,67 @@ describe("EditProviderDialog", () => {
     });
   });
 
+  it("restores the route-bound Codex key before editing live settings", async () => {
+    const provider: Provider = {
+      id: "deepseek",
+      name: "DeepSeek",
+      category: "custom",
+      settingsConfig: {
+        auth: {
+          OPENAI_API_KEY: "stored-provider-key",
+          provider_metadata: "keep-me",
+        },
+        config:
+          'model_provider = "custom"\n[model_providers.custom]\nbase_url = "https://api.deepseek.com/v1"\n',
+      },
+    };
+    const liveSettings = {
+      auth: {
+        OPENAI_API_KEY: "unrelated-global-auth-key",
+        tokens: { access_token: "global-login-cache" },
+      },
+      config:
+        'model_provider = "custom"\n[model_providers.custom]\nbase_url = "https://api.deepseek.com/v1"\nexperimental_bearer_token = "active-provider-key"\n',
+    };
+    const handleSubmit = vi.fn().mockResolvedValue(undefined);
+
+    apiMocks.getCurrent.mockResolvedValue(provider.id);
+    apiMocks.getLiveProviderSettings.mockResolvedValue(liveSettings);
+
+    render(
+      <EditProviderDialog
+        open
+        provider={provider}
+        onOpenChange={vi.fn()}
+        onSubmit={handleSubmit}
+        appId="codex"
+      />,
+    );
+
+    let restoredSettings: Record<string, any> = {};
+    await waitFor(() => {
+      restoredSettings = JSON.parse(
+        screen.getByTestId("settings-config").textContent ?? "{}",
+      );
+      expect(restoredSettings.auth).toEqual({
+        OPENAI_API_KEY: "active-provider-key",
+        provider_metadata: "keep-me",
+      });
+    });
+    expect(restoredSettings.config).not.toContain("experimental_bearer_token");
+    expect(restoredSettings.config).toContain(
+      'base_url = "https://api.deepseek.com/v1"',
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "common.save" }));
+
+    await waitFor(() => expect(handleSubmit).toHaveBeenCalledTimes(1));
+    expect(handleSubmit.mock.calls[0][0].provider.settingsConfig.auth).toEqual({
+      OPENAI_API_KEY: "active-provider-key",
+      provider_metadata: "keep-me",
+    });
+  });
+
   it("代理接管中编辑 Codex 供应商时展示数据库配置而不是读取 live 代理配置", async () => {
     const provider: Provider = {
       id: "deepseek",

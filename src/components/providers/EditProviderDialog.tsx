@@ -9,6 +9,39 @@ import {
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
 import { openclawApi, providersApi, vscodeApi, type AppId } from "@/lib/api";
+import {
+  extractCodexExperimentalBearerToken,
+  updateCodexExperimentalBearerToken,
+} from "@/utils/providerConfigUtils";
+
+const CODEX_PROXY_AUTH_PLACEHOLDER = "PROXY_MANAGED";
+
+function restoreCodexLiveSettingsForEdit(
+  liveSettings: Record<string, unknown>,
+  storedSettings: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const configText =
+    typeof liveSettings.config === "string" ? liveSettings.config : "";
+  const routeToken = extractCodexExperimentalBearerToken(configText);
+
+  if (!routeToken || routeToken === CODEX_PROXY_AUTH_PLACEHOLDER) {
+    return liveSettings;
+  }
+
+  const storedAuth = storedSettings?.auth;
+  const auth =
+    storedAuth && typeof storedAuth === "object" && !Array.isArray(storedAuth)
+      ? { ...(storedAuth as Record<string, unknown>) }
+      : {};
+
+  auth.OPENAI_API_KEY = routeToken;
+
+  return {
+    ...liveSettings,
+    auth,
+    config: updateCodexExperimentalBearerToken(configText, ""),
+  };
+}
 
 interface EditProviderDialogProps {
   open: boolean;
@@ -132,10 +165,17 @@ export function EditProviderDialog({
   }, [open, provider?.id, appId, hasLoadedLive, isProxyTakeover]); // 只依赖 provider.id，不依赖整个 provider 对象
 
   const initialSettingsConfig = useMemo(() => {
-    const base = (liveSettings ?? provider?.settingsConfig ?? {}) as Record<
+    const storedSettings = provider?.settingsConfig as
+      | Record<string, unknown>
+      | undefined;
+    const rawBase = (liveSettings ?? storedSettings ?? {}) as Record<
       string,
       unknown
     >;
+    const base =
+      appId === "codex" && liveSettings
+        ? restoreCodexLiveSettingsForEdit(liveSettings, storedSettings)
+        : rawBase;
 
     // Codex 的 modelCatalog 是 cc-switch 私有字段，SSOT 在数据库。Live 的 config.toml
     // 仅在写入时投影出 model_catalog_json 指针；Codex.app 改写配置、代理接管/恢复周期、
