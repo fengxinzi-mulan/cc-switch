@@ -20,13 +20,15 @@
             Manufacturer="{{manufacturer}}"
             Version="{{version}}">
 
+        <!-- Keep per-user registration, but elevate file operations so Windows Installer
+             can manage its protected Config.Msi rollback directories on every volume. -->
         <Package Id="*"
                  Keywords="Installer"
                  InstallerVersion="450"
                  Languages="0"
                  Compressed="yes"
                  InstallScope="perUser"
-                 InstallPrivileges="limited"
+                 InstallPrivileges="elevated"
                  SummaryCodepage="!(loc.TauriCodepage)"/>
 
         <!-- https://docs.microsoft.com/en-us/windows/win32/msi/reinstallmode -->
